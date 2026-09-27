@@ -1,5 +1,7 @@
-from datetime import datetime, timedelta, timezone
+import json
 import os
+import socket
+from datetime import datetime, timedelta, timezone
 
 import jwt
 import psycopg2
@@ -23,6 +25,34 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD", "complaint123")
 }
 
+LOGSTASH_HOST = os.getenv("LOGSTASH_HOST")
+LOGSTASH_PORT = int(os.getenv("LOGSTASH_PORT", "5000"))
+
+
+def send_log(level, message):
+    log_data = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "auth-service",
+        "level": level,
+        "message": message,
+        "host": socket.gethostname()
+    }
+
+    if not LOGSTASH_HOST:
+        print(json.dumps(log_data))
+        return
+
+    try:
+        with socket.create_connection(
+            (LOGSTASH_HOST, LOGSTASH_PORT),
+            timeout=1
+        ) as connection:
+            connection.sendall(
+                (json.dumps(log_data) + "\n").encode()
+            )
+    except Exception:
+        print(json.dumps(log_data))
+
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
@@ -42,16 +72,20 @@ class LoginRequest(BaseModel):
 
 @app.get("/")
 def root():
+    send_log("INFO", "Auth service root endpoint accessed")
     return {"message": "Authentication Service is running"}
 
 
 @app.get("/health")
 def health():
+    send_log("INFO", "Auth service health check")
     return {"status": "healthy"}
 
 
 @app.post("/register")
 def register(user: RegisterRequest):
+    send_log("INFO", f"Registration attempt for {user.email}")
+
     connection = get_db_connection()
     cursor = connection.cursor()
 
@@ -75,6 +109,8 @@ def register(user: RegisterRequest):
         user_id = cursor.fetchone()[0]
         connection.commit()
 
+        send_log("INFO", f"User registered: {user.email}")
+
         return {
             "message": "User registered successfully",
             "user_id": user_id,
@@ -84,6 +120,8 @@ def register(user: RegisterRequest):
 
     except psycopg2.errors.UniqueViolation:
         connection.rollback()
+        send_log("WARNING", f"Duplicate user registration: {user.email}")
+
         raise HTTPException(
             status_code=400,
             detail="User already exists"
@@ -96,6 +134,8 @@ def register(user: RegisterRequest):
 
 @app.post("/login")
 def login(user: LoginRequest):
+    send_log("INFO", f"Login attempt for {user.email}")
+
     connection = get_db_connection()
     cursor = connection.cursor()
 
@@ -112,6 +152,8 @@ def login(user: LoginRequest):
         stored_user = cursor.fetchone()
 
         if not stored_user:
+            send_log("WARNING", f"Login failed: {user.email}")
+
             raise HTTPException(
                 status_code=401,
                 detail="Invalid email or password"
@@ -120,6 +162,8 @@ def login(user: LoginRequest):
         user_id, email, stored_password, role = stored_user
 
         if not password_hash.verify(user.password, stored_password):
+            send_log("WARNING", f"Invalid password: {user.email}")
+
             raise HTTPException(
                 status_code=401,
                 detail="Invalid email or password"
@@ -137,6 +181,8 @@ def login(user: LoginRequest):
             SECRET_KEY,
             algorithm=ALGORITHM
         )
+
+        send_log("INFO", f"Login successful: {user.email}")
 
         return {
             "message": "Login successful",

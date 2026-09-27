@@ -1,4 +1,7 @@
+import json
 import os
+import socket
+from datetime import datetime, timezone
 
 import jwt
 import httpx
@@ -24,6 +27,34 @@ NOTIFICATION_SERVICE_URL = os.getenv(
     "NOTIFICATION_SERVICE_URL",
     "http://127.0.0.1:8004"
 )
+
+LOGSTASH_HOST = os.getenv("LOGSTASH_HOST")
+LOGSTASH_PORT = int(os.getenv("LOGSTASH_PORT", "5000"))
+
+
+def send_log(level, message):
+    log_data = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "assignment-service",
+        "level": level,
+        "message": message,
+        "host": socket.gethostname()
+    }
+
+    if not LOGSTASH_HOST:
+        print(json.dumps(log_data))
+        return
+
+    try:
+        with socket.create_connection(
+            (LOGSTASH_HOST, LOGSTASH_PORT),
+            timeout=1
+        ) as connection:
+            connection.sendall(
+                (json.dumps(log_data) + "\n").encode()
+            )
+    except Exception:
+        print(json.dumps(log_data))
 
 
 def get_db_connection():
@@ -53,6 +84,11 @@ def verify_admin_token(authorization: str):
         )
 
         if payload.get("role") != "ADMIN":
+            send_log(
+                "WARNING",
+                "Non-admin attempted admin operation"
+            )
+
             raise HTTPException(
                 status_code=403,
                 detail="Admin access required"
@@ -75,11 +111,13 @@ class AssignmentRequest(BaseModel):
 
 @app.get("/")
 def root():
+    send_log("INFO", "Assignment service root endpoint accessed")
     return {"message": "Assignment Service is running"}
 
 
 @app.get("/health")
 def health():
+    send_log("INFO", "Assignment service health check")
     return {"status": "healthy"}
 
 
@@ -89,6 +127,11 @@ def create_assignment(
     authorization: str = Header(None)
 ):
     verify_admin_token(authorization)
+
+    send_log(
+        "INFO",
+        f"Creating assignment for complaint {assignment.complaint_id}"
+    )
 
     connection = get_db_connection()
     cursor = connection.cursor()
@@ -134,7 +177,17 @@ def create_assignment(
 
             response.raise_for_status()
 
+            send_log(
+                "INFO",
+                "Notification sent successfully"
+            )
+
         except httpx.RequestError:
+            send_log(
+                "ERROR",
+                "Notification Service unavailable"
+            )
+
             raise HTTPException(
                 status_code=503,
                 detail="Notification Service is unavailable"

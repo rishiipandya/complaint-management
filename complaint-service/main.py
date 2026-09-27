@@ -1,4 +1,7 @@
+import json
 import os
+import socket
+from datetime import datetime, timezone
 
 import jwt
 import psycopg2
@@ -19,6 +22,34 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD", "complaint123")
 }
 
+LOGSTASH_HOST = os.getenv("LOGSTASH_HOST")
+LOGSTASH_PORT = int(os.getenv("LOGSTASH_PORT", "5000"))
+
+
+def send_log(level, message):
+    log_data = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "complaint-service",
+        "level": level,
+        "message": message,
+        "host": socket.gethostname()
+    }
+
+    if not LOGSTASH_HOST:
+        print(json.dumps(log_data))
+        return
+
+    try:
+        with socket.create_connection(
+            (LOGSTASH_HOST, LOGSTASH_PORT),
+            timeout=1
+        ) as connection:
+            connection.sendall(
+                (json.dumps(log_data) + "\n").encode()
+            )
+    except Exception:
+        print(json.dumps(log_data))
+
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
@@ -26,6 +57,8 @@ def get_db_connection():
 
 def verify_token(authorization: str):
     if not authorization:
+        send_log("WARNING", "Missing authorization header")
+
         raise HTTPException(
             status_code=401,
             detail="Authorization header required"
@@ -47,6 +80,8 @@ def verify_token(authorization: str):
         )
 
     except jwt.InvalidTokenError:
+        send_log("WARNING", "Invalid JWT token")
+
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token"
@@ -65,11 +100,13 @@ class StatusUpdate(BaseModel):
 
 @app.get("/")
 def root():
+    send_log("INFO", "Complaint service root endpoint accessed")
     return {"message": "Complaint Service is running"}
 
 
 @app.get("/health")
 def health():
+    send_log("INFO", "Complaint service health check")
     return {"status": "healthy"}
 
 
@@ -79,6 +116,11 @@ def create_complaint(
     authorization: str = Header(None)
 ):
     user = verify_token(authorization)
+
+    send_log(
+        "INFO",
+        f"Creating complaint for {user['email']}"
+    )
 
     connection = get_db_connection()
     cursor = connection.cursor()
@@ -103,6 +145,11 @@ def create_complaint(
         row = cursor.fetchone()
         connection.commit()
 
+        send_log(
+            "INFO",
+            f"Complaint created: {row[0]}"
+        )
+
         return {
             "id": row[0],
             "title": row[1],
@@ -122,6 +169,8 @@ def get_complaints(
     authorization: str = Header(None)
 ):
     verify_token(authorization)
+
+    send_log("INFO", "Fetching complaints")
 
     connection = get_db_connection()
     cursor = connection.cursor()
@@ -205,6 +254,11 @@ def update_status(
     user = verify_token(authorization)
 
     if user.get("role") != "ADMIN":
+        send_log(
+            "WARNING",
+            f"Unauthorized status update attempt by {user.get('email')}"
+        )
+
         raise HTTPException(
             status_code=403,
             detail="Admin access required"
@@ -233,6 +287,11 @@ def update_status(
             )
 
         connection.commit()
+
+        send_log(
+            "INFO",
+            f"Complaint {complaint_id} status updated to {update.status}"
+        )
 
         return {
             "id": row[0],
