@@ -1,0 +1,79 @@
+name: Complaint Management CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r auth-service/requirements.txt
+          pip install -r user-service/requirements.txt
+          pip install -r complaint-service/requirements.txt
+          pip install -r assignment-service/requirements.txt
+          pip install -r notification-service/requirements.txt
+
+      - name: Build Auth image
+        run: |
+          docker build -t riship2003/complaint-auth:latest ./auth-service
+
+      - name: Build User image
+        run: |
+          docker build -t riship2003/complaint-user:latest ./user-service
+
+      - name: Build Complaint image
+        run: |
+          docker build -t riship2003/complaint-service:latest ./complaint-service
+
+      - name: Build Assignment image
+        run: |
+          docker build -t riship2003/complaint-assignment:latest ./assignment-service
+
+      - name: Build Notification image
+        run: |
+          docker build -t riship2003/complaint-notification:latest ./notification-service
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push Auth image
+        run: |
+          docker push riship2003/complaint-auth:latest
+
+      - name: Push User image
+        run: |
+          docker push riship2003/complaint-user:latest
+
+      - name: Push Complaint image
+        run: |
+          docker push riship2003/complaint-service:latest
+
+      - name: Push Assignment image
+        run: |
+          docker push riship2003/complaint-assignment:latest
+
+      - name: Push Notification image
+        run: |
+          docker push riship2003/complaint-notification:latest
